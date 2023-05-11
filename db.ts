@@ -101,15 +101,16 @@ const updatePost = (
   callback: any,
   errorCallback: any
 ) => {
+  const query = `UPDATE post SET title = ?, content = ?${ imageName !== '' ? ', image = ?' : ''} WHERE post.id = ?`;
+  console.log(query)
   db.query(
-    'UPDATE post SET title = ?, content = ?, image= ? WHERE post.id = ?',
-    [title, content, imageName, id],
+    query,
+    imageName != '' ? [title, content, imageName, id] : [title, content, id],
     function (error: any, result: any) {
-      console.log(error, result);
       if (error) {
         errorCallback(error);
       }
-      console.log('re', result)
+      console.log('re', result);
       if (result.affectedRows != 1) {
         errorCallback('Incorrect row updated');
       } else {
@@ -217,16 +218,16 @@ const selectUserIdFromAuthToken = (
   callback: any,
   errorCallback: any
 ) => {
-  console.log("auth token", authToken)
+  console.log('auth token', authToken);
   db.query(
-    "SELECT user_id, created_at FROM auth_tokens WHERE auth_token = ?",
+    'SELECT user_id, created_at FROM auth_tokens WHERE auth_token = ?',
     authToken,
     function (error: any, result: any) {
-      console.log('printingresult', result, error, result.length)
+      console.log('printingresult', result, error, result.length);
       if (error) {
         errorCallback(error);
       } else if (result.length != 1) {
-        console.log("test")
+        console.log('test');
         //no auth token
         //in case there is more than 1 delete all auth tokens in here
         errorCallback('User not found');
@@ -234,7 +235,7 @@ const selectUserIdFromAuthToken = (
         //check if the token is within the time
         //get the created_at time + 8hrs if its after now then token has expired
         if (moment(result[0].created_at).add(8, 'hours').isBefore(moment())) {
-          console.log('twas before')
+          console.log('twas before');
           db.query(
             'DELETE auth_token FROM auth_tokens WHERE auth_token = ?',
             authToken,
@@ -247,7 +248,7 @@ const selectUserIdFromAuthToken = (
             }
           );
         } else {
-          console.log('sending back id')
+          console.log('sending back id');
           //its valid return just the id
           callback(result[0].user_id);
         }

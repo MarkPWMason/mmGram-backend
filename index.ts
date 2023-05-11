@@ -82,13 +82,13 @@ app.post('/createpost', upload.single('image'), async (req: any, res: any) => {
   const content = req.body.content;
   const user_id = req.body.user_id;
   const auth_token = req.body.auth_token;
-  console.log('create post body', auth_token)
+  console.log('create post body', auth_token);
 
   dbObj.selectUserIdFromAuthToken(
     auth_token,
     async () => {
       const buffer = await sharp(req.file.buffer)
-        .resize({ height: 1920, width: 1080, fit: 'contain' })
+        .resize({ height: 500, width: 500, fit: 'cover' })
         .toBuffer();
 
       const imageName = randomImageName();
@@ -101,7 +101,6 @@ app.post('/createpost', upload.single('image'), async (req: any, res: any) => {
 
       const command = new PutObjectCommand(params);
       await s3.send(command);
-
       dbObj.createPost(
         title,
         content,
@@ -126,7 +125,7 @@ app.post('/createpost', upload.single('image'), async (req: any, res: any) => {
       );
     },
     (error: any) => {
-      console.log('error recieved', error)
+      console.log('error recieved', error);
       if (error === 'Token Expired') {
         res.status(403);
       } else if (error === 'User not found') {
@@ -178,96 +177,104 @@ app.post('/updatepost', upload.single('image'), async (req: any, res: any) => {
   const content = req.body.content;
   const id = req.body.id;
   const auth_token = req.body.auth_token;
+  let url: any = req.body.image;
 
-  console.log("body", req.body);
-
-  dbObj.selectUserIdFromAuthToken(
-    auth_token,
-    async (user_idFromDB: number) => {
-      console.log(user_idFromDB, user_id)
-      if (user_idFromDB.toString() !== user_id.toString()) {
-        res.status(403);
-        res.send();
-      } else {
-        dbObj.selectImageNameById(
-          id,
-          async (currentImageName: string) => {
-            console.log('slect image by name')
-            const params = {
-              Bucket: bucketName,
-              Key: currentImageName,
-            };
-            const command = new DeleteObjectCommand(params);
-            await s3.send(command);
-
-            const imageName = randomImageName();
-            dbObj.updatePost(
-              id,
-              title,
-              content,
-              imageName,
-              async () => {
-                console.log('update post')
-                const buffer = await sharp(req.file.buffer)
-                  .resize({ height: 1920, width: 1080, fit: 'contain' })
-                  .toBuffer();
-
-                const paramsUpdate = {
-                  Bucket: bucketName,
-                  Key: imageName,
-                  Body: buffer,
-                  ContentType: req.file.mimetype,
-                };
-
-                const commandUpdate = new PutObjectCommand(paramsUpdate);
-
-                const getObjectParams = {
-                  Bucket: bucketName,
-                  Key: imageName,
-                };
-
-                const command = new GetObjectCommand(getObjectParams);
-                const url = await getSignedUrl(s3, command, {
-                  expiresIn: 3600,
-                });
-                await s3.send(commandUpdate);
-                
-                res.set('Content-Type', 'application/json');
-                res.status(200);
-                res.write(
-                  JSON.stringify({
-                    title: title,
-                    content: content,
-                    imageUrl: url,
-                  })
-                );
-                res.send();
-              },
-              (error: any) => {
-                console.log('update error')
-                console.error(error);
-                res.status(500);
+  if (req.body.title !== '' && req.body.content !== '') {
+    dbObj.selectUserIdFromAuthToken(
+      auth_token,
+      async (user_idFromDB: number) => {
+        if (user_idFromDB.toString() !== user_id.toString()) {
+          res.status(403);
+          res.send();
+        } else {
+          dbObj.selectImageNameById(
+            id,
+            async (currentImageName: string) => {
+              const params = {
+                Bucket: bucketName,
+                Key: currentImageName,
+              };
+              if (typeof req.file !== 'undefined') {
+                const command = new DeleteObjectCommand(params);
+                await s3.send(command);
               }
-            );
-          },
-          (error: any) => {
-            console.error(error);
-            res.status(500);
-          }
-        );
+              let imageName: string = ""
+              if(typeof req.file !== 'undefined'){
+                imageName = randomImageName();
+              }
+               
+              dbObj.updatePost(
+                id,
+                title,
+                content,
+                imageName,
+                async () => {
+                  console.log('IMAGE URL: ', imageName);
+                  if (
+                    typeof req.file !== 'undefined' &&
+                    typeof req.file.buffer !== 'undefined'
+                  ) {
+                    const buffer = await sharp(req.file.buffer)
+                      .resize({ height: 500, width: 500, fit: 'cover' })
+                      .toBuffer();
+
+                    const paramsUpdate = {
+                      Bucket: bucketName,
+                      Key: imageName,
+                      Body: buffer,
+                      ContentType: req.file.mimetype,
+                    };
+
+                    const commandUpdate = new PutObjectCommand(paramsUpdate);
+
+                    const getObjectParams = {
+                      Bucket: bucketName,
+                      Key: imageName,
+                    };
+
+                    const command = new GetObjectCommand(getObjectParams);
+                    url = await getSignedUrl(s3, command, {
+                      expiresIn: 3600,
+                    });
+                    await s3.send(commandUpdate);
+                  }
+                  res.set('Content-Type', 'application/json');
+                  res.status(200);
+                  res.write(
+                    JSON.stringify({
+                      title: title,
+                      content: content,
+                      imageUrl: url,
+                    })
+                  );
+                  res.send();
+                },
+                (error: any) => {
+                  console.log('update error');
+                  console.error(error);
+                  res.status(500);
+                }
+              );
+            },
+            (error: any) => {
+              console.error(error);
+              res.status(500);
+            }
+          );
+        }
+      },
+      (error: any) => {
+        if (error === 'Token Expired') {
+          res.status(403);
+        } else if (error === 'User not found') {
+          res.status(404);
+        } else {
+          res.status(500);
+        }
+        res.send();
       }
-    },
-    (error: any) => {
-      if (error === 'Token Expired') {
-        res.status(403);
-      } else if (error === 'User not found') {
-        res.status(404);
-      } else {
-        res.status(500);
-      }
-      res.send();
-    }
-  );
+    );
+  }
 });
 
 app.post('/register', bodyParser.json(), async (req: any, res: any) => {
