@@ -52,7 +52,10 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 app.get('/', bodyParser.json(), async (req: any, res: any) => {
+  const user_id = req.query.user_id;
+
   dbObj.returnPosts(
+    user_id,
     async (results: any) => {
       for (const post of results) {
         const getObjectParams = {
@@ -82,60 +85,71 @@ app.post('/createpost', upload.single('image'), async (req: any, res: any) => {
   const content = req.body.content;
   const user_id = req.body.user_id;
   const auth_token = req.body.auth_token;
-  console.log('create post body', auth_token);
+  const post_format = req.file.mimetype;
+  if (req.body.title !== '' && req.body.content !== '') {
+    dbObj.selectUserIdFromAuthToken(
+      auth_token,
+      async () => {
+        if (
+          typeof req.file !== 'undefined' &&
+          typeof req.file.buffer !== 'undefined'
+        ) {
+          // const buffer = await sharp(req.file.buffer)
+          //   .resize({ height: 500, width: 500, fit: 'cover' })
+          //   .toBuffer();
 
-  dbObj.selectUserIdFromAuthToken(
-    auth_token,
-    async () => {
-      const buffer = await sharp(req.file.buffer)
-        .resize({ height: 500, width: 500, fit: 'cover' })
-        .toBuffer();
-
-      const imageName = randomImageName();
-      const params = {
-        Bucket: bucketName,
-        Key: imageName,
-        Body: buffer,
-        ContentType: req.file.mimetype,
-      };
-
-      const command = new PutObjectCommand(params);
-      await s3.send(command);
-      dbObj.createPost(
-        title,
-        content,
-        imageName,
-        user_id,
-        async (id: any) => {
-          const getObjectParams = {
+          const imageName = randomImageName();
+          const params = {
             Bucket: bucketName,
             Key: imageName,
+            Body: req.file.buffer,
+            ContentType: req.file.mimetype,
           };
+          const command = new PutObjectCommand(params);
+          await s3.send(command);
+          dbObj.createPost(
+            title,
+            content,
+            imageName,
+            user_id,
+            post_format,
+            async (id: any) => {
+              const getObjectParams = {
+                Bucket: bucketName,
+                Key: imageName,
+              };
 
-          const command = new GetObjectCommand(getObjectParams);
-          const url = await getSignedUrl(s3, command, { expiresIn: 3600 });
-          res.status(200);
-          res.write(JSON.stringify({ id: id, imageUrl: url }));
-          res.send();
-        },
-        (error: any) => {
-          console.error(error);
+              const command = new GetObjectCommand(getObjectParams);
+              const url = await getSignedUrl(s3, command, { expiresIn: 3600 });
+              res.status(200);
+              res.write(
+                JSON.stringify({
+                  id: id,
+                  imageUrl: url,
+                  filetype: req.file.mimetype,
+                })
+              );
+              res.send();
+            },
+            (error: any) => {
+              console.error(error);
+              res.status(500);
+            }
+          );
+        }
+      },
+      (error: any) => {
+        if (error === 'Token Expired') {
+          res.status(403);
+        } else if (error === 'User not found') {
+          res.status(404);
+        } else {
           res.status(500);
         }
-      );
-    },
-    (error: any) => {
-      console.log('error recieved', error);
-      if (error === 'Token Expired') {
-        res.status(403);
-      } else if (error === 'User not found') {
-        res.status(404);
-      } else {
-        res.status(500);
+        res.send();
       }
-      res.send();
-    }
-  );
+    );
+  }
 });
 
 app.delete('/deletepost', bodyParser.json(), async (req: any, res: any) => {
@@ -177,6 +191,7 @@ app.post('/updatepost', upload.single('image'), async (req: any, res: any) => {
   const content = req.body.content;
   const id = req.body.id;
   const auth_token = req.body.auth_token;
+  const post_format = req.file.mimetype;
   let url: any = req.body.image;
 
   if (req.body.title !== '' && req.body.content !== '') {
@@ -198,30 +213,30 @@ app.post('/updatepost', upload.single('image'), async (req: any, res: any) => {
                 const command = new DeleteObjectCommand(params);
                 await s3.send(command);
               }
-              let imageName: string = ""
-              if(typeof req.file !== 'undefined'){
+              let imageName: string = '';
+              if (typeof req.file !== 'undefined') {
                 imageName = randomImageName();
               }
-               
+
               dbObj.updatePost(
                 id,
                 title,
                 content,
                 imageName,
+                post_format,
                 async () => {
-                  console.log('IMAGE URL: ', imageName);
                   if (
                     typeof req.file !== 'undefined' &&
                     typeof req.file.buffer !== 'undefined'
                   ) {
-                    const buffer = await sharp(req.file.buffer)
-                      .resize({ height: 500, width: 500, fit: 'cover' })
-                      .toBuffer();
+                    // const buffer = await sharp(req.file.buffer)
+                    //   .resize({ height: 500, width: 500, fit: 'cover' })
+                    //   .toBuffer();
 
                     const paramsUpdate = {
                       Bucket: bucketName,
                       Key: imageName,
-                      Body: buffer,
+                      Body: req.file.buffer,
                       ContentType: req.file.mimetype,
                     };
 
@@ -245,12 +260,12 @@ app.post('/updatepost', upload.single('image'), async (req: any, res: any) => {
                       title: title,
                       content: content,
                       imageUrl: url,
+                      filetype: req.file.mimetype,
                     })
                   );
                   res.send();
                 },
                 (error: any) => {
-                  console.log('update error');
                   console.error(error);
                   res.status(500);
                 }
@@ -293,7 +308,6 @@ app.post('/register', bodyParser.json(), async (req: any, res: any) => {
         () => {
           res.set('Content-Type', 'application/json');
           res.status(200);
-          console.log('send res');
           res.write(
             JSON.stringify({
               username: username,
@@ -361,13 +375,124 @@ app.post('/login', bodyParser.json(), async (req: any, res: any) => {
     },
     (error: any) => {
       if (error === 'User not found') {
-        console.log('error 404');
         res.status(404);
       } else {
-        console.log('error 500');
         res.status(500);
       }
       res.send();
+    }
+  );
+});
+
+app.post('/likepost', bodyParser.json(), async (req: any, res: any) => {
+  const post_id = req.body.id;
+  const user_id = req.body.user_id;
+  dbObj.likePost(
+    post_id,
+    user_id,
+    (likes: number) => {
+      res.set('Content-Type', 'application/json');
+      res.status(200);
+      res.write(
+        JSON.stringify({
+          user_id: user_id,
+          post_id: post_id,
+          likes: likes,
+        })
+      );
+      res.send();
+    },
+    (error: any) => {
+      if (error === 'User not found') {
+        res.status(404);
+      } else {
+        res.status(500);
+      }
+      res.send();
+    }
+  );
+});
+
+app.post('/addcomment', bodyParser.json(), async (req: any, res: any) => {
+  const post_id = req.body.post_id;
+  const user_id = req.body.user_id;
+  const comment = req.body.comment;
+  const username = req.body.username;
+  const reply_id = req.body.reply_id;
+
+  dbObj.addComment(
+    post_id,
+    user_id,
+    comment,
+    username,
+    reply_id,
+    (id: number) => {
+      res.set('Content-Type', 'application/json');
+      res.status(200);
+      res.write(
+        JSON.stringify({
+          post_id: post_id,
+          comment: comment,
+          id: id,
+          username: username,
+        })
+      );
+      res.send();
+    },
+    (error: any) => {
+      if (error === 'User not found') {
+        res.status(404);
+      } else {
+        res.status(500);
+      }
+      res.send();
+    }
+  );
+});
+
+app.get('/comments', bodyParser.json(), async (req: any, res: any) => {
+  const post_id = req.query.post_id;
+
+  dbObj.selectComments(
+    post_id,
+    async (results: any) => {
+      res.set('Content-Type', 'application/json');
+      res.status(200);
+      res.write(JSON.stringify(results));
+      res.send();
+    },
+    (error: any) => {
+      console.error(error);
+      res.status(500);
+    }
+  );
+});
+
+app.get('/userposts', bodyParser.json(), async (req: any, res: any) => {
+  const user_id = req.query.user_id;
+
+  dbObj.returnUserPosts(
+    user_id,
+    async (results: any) => {
+      for (const post of results) {
+        const getObjectParams = {
+          Bucket: bucketName,
+          Key: post.imageName,
+        };
+
+        const command = new GetObjectCommand(getObjectParams);
+        const url = await getSignedUrl(s3, command, { expiresIn: 3600 });
+        post.imageUrl = url;
+      }
+
+      res.set('Content-Type', 'application/json');
+      res.status(200);
+      res.write(JSON.stringify(results));
+      res.send();
+    },
+    (error: any) => {
+      console.error(error);
+      res.status(500);
     }
   );
 });
