@@ -5,6 +5,7 @@ const dbObj = require('./db');
 const cors = require('cors');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcrypt');
 
 import crypto from 'crypto';
 import {
@@ -85,8 +86,17 @@ app.post('/createpost', upload.single('image'), async (req: any, res: any) => {
   const content = req.body.content;
   const user_id = req.body.user_id;
   const auth_token = req.body.auth_token;
-  const post_format = req.file.mimetype;
-  if (req.body.title !== '' && req.body.content !== '') {
+  let post_format: any;
+  if (req.file) {
+    post_format = req.file.mimetype;
+  } else {
+    res.status(400);
+  }
+  if (
+    req.body.title !== '' &&
+    req.body.content !== '' &&
+    typeof post_format !== 'undefined'
+  ) {
     dbObj.selectUserIdFromAuthToken(
       auth_token,
       async () => {
@@ -126,7 +136,7 @@ app.post('/createpost', upload.single('image'), async (req: any, res: any) => {
                 JSON.stringify({
                   id: id,
                   imageUrl: url,
-                  filetype: req.file.mimetype,
+                  filetype: post_format,
                 })
               );
               res.send();
@@ -157,11 +167,11 @@ app.delete('/deletepost', bodyParser.json(), async (req: any, res: any) => {
   const user_id = req.body.user_id;
   const auth_token = req.body.auth_token;
 
-  dbObj.selectUserIdFromAuthToken(auth_token, async (user_idFromDB: number) => {
-    if (user_idFromDB !== user_id) {
-      res.status(403);
-      res.send();
-    } else {
+  dbObj.validateAuthToken(
+    auth_token,
+    user_id,
+    id,
+    async () => {
       dbObj.deletePost(
         id,
         async (imageName: string) => {
@@ -181,27 +191,41 @@ app.delete('/deletepost', bodyParser.json(), async (req: any, res: any) => {
           res.status(500);
         }
       );
+    },
+    () => {
+      res.status(403);
+      res.send();
     }
-  });
+  );
 });
 
-app.post('/updatepost', upload.single('image'), async (req: any, res: any) => {
-  const user_id = req.body.user_id;
-  const title = req.body.title;
-  const content = req.body.content;
-  const id = req.body.id;
-  const auth_token = req.body.auth_token;
-  const post_format = req.file.mimetype;
-  let url: any = req.body.image;
+app.post(
+  '/updatepost',
+  upload.single('image'),
+  bodyParser.json(),
+  async (req: any, res: any) => {
+    console.log('body', req.body);
+    console.log('file', req.file);
+    const user_id = req.body.user_id;
+    const title = req.body.title;
+    const content = req.body.content;
+    const id = req.body.id;
+    const auth_token = req.body.auth_token;
 
-  if (req.body.title !== '' && req.body.content !== '') {
-    dbObj.selectUserIdFromAuthToken(
-      auth_token,
-      async (user_idFromDB: number) => {
-        if (user_idFromDB.toString() !== user_id.toString()) {
-          res.status(403);
-          res.send();
-        } else {
+    let url: any;
+    let post_format: any;
+    if (req.file) {
+      post_format = req.file.mimetype;
+    } else {
+      res.status(400);
+    }
+
+    if (req.body.title !== '' && req.body.content !== '') {
+      dbObj.validateAuthToken(
+        auth_token,
+        user_id,
+        id,
+        async () => {
           dbObj.selectImageNameById(
             id,
             async (currentImageName: string) => {
@@ -260,7 +284,7 @@ app.post('/updatepost', upload.single('image'), async (req: any, res: any) => {
                       title: title,
                       content: content,
                       imageUrl: url,
-                      filetype: req.file.mimetype,
+                      filetype: post_format,
                     })
                   );
                   res.send();
@@ -276,102 +300,115 @@ app.post('/updatepost', upload.single('image'), async (req: any, res: any) => {
               res.status(500);
             }
           );
-        }
-      },
-      (error: any) => {
-        if (error === 'Token Expired') {
+        },
+        () => {
           res.status(403);
-        } else if (error === 'User not found') {
-          res.status(404);
-        } else {
-          res.status(500);
+          res.send();
         }
-        res.send();
-      }
-    );
+      );
+    }
   }
-});
+);
 
 app.post('/register', bodyParser.json(), async (req: any, res: any) => {
   const username = req.body.username;
   const password = req.body.password;
+  const inviteCode = req.body.inviteCode;
 
-  dbObj.createUser(
-    username,
-    password,
-    (id: number) => {
-      //now we can create the auth token
-      const authToken = uuidv4();
-      dbObj.storeAuthToken(
-        id,
-        authToken,
-        () => {
-          res.set('Content-Type', 'application/json');
-          res.status(200);
-          res.write(
-            JSON.stringify({
-              username: username,
-              authToken: authToken,
-              user_id: id,
-              isLoggedIn: true,
-            })
-          );
-          res.send();
-        },
-        () => {
-          res.set('Content-Type', 'application/json');
-          res.status(200);
-          res.write(
-            JSON.stringify({
-              isLoggedIn: false,
-            })
-          );
-          res.send();
-        }
-      );
-      //if this fails then return back saying they aren't logged in and then redirect to login
-    },
-    (error: any) => {
-      if (error === 'Username Exists') {
-        res.status(409);
-      } else {
-        res.status(500);
-      }
-      res.send();
-    }
-  );
+  if (inviteCode === process.env.INVITE_CODE) {
+    const saltRounds = 10;
+    bcrypt
+      .genSalt(saltRounds)
+      .then((salt: any) => {
+        return bcrypt.hash(password, salt);
+      })
+      .then((hash: any) => {
+        dbObj.createUser(
+          username,
+          hash,
+          (id: number) => {
+            //now we can create the auth token
+            const authToken = uuidv4();
+            dbObj.storeAuthToken(
+              id,
+              authToken,
+              () => {
+                res.set('Content-Type', 'application/json');
+                res.status(200);
+                res.write(
+                  JSON.stringify({
+                    username: username,
+                    authToken: authToken,
+                    user_id: id,
+                    isLoggedIn: true,
+                  })
+                );
+                res.send();
+              },
+              () => {
+                res.set('Content-Type', 'application/json');
+                res.status(200);
+                res.write(
+                  JSON.stringify({
+                    isLoggedIn: false,
+                  })
+                );
+                res.send();
+              }
+            );
+            //if this fails then return back saying they aren't logged in and then redirect to login
+          },
+          (error: any) => {
+            if (error === 'Username Exists') {
+              res.status(409);
+            } else {
+              res.status(500);
+            }
+            res.send();
+          }
+        );
+      })
+      .catch((err: any) => console.error(err.message));
+  } else{
+    res.status(403);
+    res.send();
+  }
 });
 
 app.post('/login', bodyParser.json(), async (req: any, res: any) => {
   const username = req.body.username;
   const password = req.body.password;
-  dbObj.login(
-    username,
-    password,
 
-    (id: number) => {
-      const authToken = uuidv4();
-      dbObj.storeAuthToken(
-        id,
-        authToken,
-        () => {
-          res.set('Content-Type', 'application/json');
-          res.status(200);
-          res.write(
-            JSON.stringify({
-              username: username,
-              authToken: authToken,
-              user_id: id,
-            })
+  dbObj.getPassword(
+    username,
+    (data: any) => {
+      bcrypt
+        .compare(password, data[0].password)
+        .then(() => {
+          const authToken = uuidv4();
+          dbObj.storeAuthToken(
+            data[0].id,
+            authToken,
+            () => {
+              res.set('Content-Type', 'application/json');
+              res.status(200);
+              res.write(
+                JSON.stringify({
+                  username: username,
+                  authToken: authToken,
+                  user_id: data[0].id,
+                })
+              );
+              res.send();
+            },
+            () => {
+              res.set('Content-Type', 'application/json');
+              res.status(500);
+              res.send();
+            }
           );
-          res.send();
-        },
-        () => {
-          res.set('Content-Type', 'application/json');
-          res.status(500);
-          res.send();
-        }
-      );
+        })
+        .catch((err: any) => console.error(err.message));
     },
     (error: any) => {
       if (error === 'User not found') {

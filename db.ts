@@ -1,3 +1,5 @@
+import { userInfo } from 'os';
+
 const mysql = require('sync-mysql');
 require('dotenv').config();
 const moment = require('moment');
@@ -34,13 +36,11 @@ const returnPosts = (user_id: number, callback: any, errorCallback: any) => {
       }
 
       let isVideo = false;
-      if (r.post_format.includes('mp4')) {
+      if (r.post_format.includes('video')) {
         isVideo = true;
       } else {
         isVideo = false;
       }
-
-      console.log("test",selectHasLike)
 
       return {
         id: r.id,
@@ -149,13 +149,19 @@ const updatePost = (
   callback: any,
   errorCallback: any
 ) => {
+
+  console.log(id, title, content, typeof imageName,imageName.length, imageName != '', post_format)
+
+
   const query = `UPDATE post SET title = ?, content = ?${
-    imageName !== '' ? ', image = ?' : ''
-  }, post_format = ? WHERE post.id = ?`;
+    imageName !== '' ? ', image = ?, post_format = ?' : ''
+  } WHERE post.id = ?`;
   try {
-    const updateResult = db.query(
+    db.query(
       query,
-      imageName != '' ? [title, content, imageName, post_format ,id] : [title, content, id]
+      imageName != ''
+        ? [title, content, imageName, post_format, id]
+        : [title, content, id]
     );
     callback();
   } catch (error) {
@@ -225,10 +231,12 @@ const storeAuthToken = (
   errorCallback: any
 ) => {
   try {
-    const result = db.query(
-      'INSERT INTO auth_tokens (user_id, auth_token) VALUES (?, ?)',
-      [id, authToken]
-    );
+    db.query('DELETE from auth_tokens where user_id = ?', [id]);
+
+    db.query('INSERT INTO auth_tokens (user_id, auth_token) VALUES (?, ?)', [
+      id,
+      authToken,
+    ]);
     callback();
   } catch (error) {
     errorCallback(error);
@@ -246,16 +254,43 @@ const selectUserIdFromAuthToken = (
       [authToken]
     );
     if (moment(selectResult[0].created_at).add(8, 'hours').isBefore(moment())) {
-      const deleteResult = db.query(
-        'DELETE FROM auth_tokens WHERE auth_token = ?',
-        [authToken]
-      );
+      db.query('DELETE FROM auth_tokens WHERE auth_token = ?', [authToken]);
     } else {
       callback(selectResult[0].user_id);
     }
   } catch (error) {
     errorCallback(error);
   }
+};
+
+const validateAuthToken = (
+  authToken: string,
+  user_id: number,
+  post_id: number,
+  callback: any,
+  errorCallback: any
+) => {
+  //get user_id and auth_token associated with the post
+  const userIDFromPost = db.query('SELECT user_id FROM post WHERE id = ?', [
+    post_id,
+  ]);
+  const authTokenResult = db.query(
+    'SELECT auth_token FROM auth_tokens WHERE user_id = ?',
+    [userIDFromPost[0].user_id]
+  );
+  if (
+    user_id == userIDFromPost[0].user_id.toString() &&
+    authToken == authTokenResult[0].auth_token
+  ) {
+    callback();
+  } else {
+    errorCallback();
+  }
+  //auth_token may not exist
+  //compare the auth_token from the post to the one passed into this func
+  //compare the userr_id from the post to the one passed into this func
+  //if they match return callback
+  //if they fail return 403
 };
 
 const likePost = (
@@ -349,6 +384,21 @@ const selectComments = (post_id: number, callback: any, errorCallback: any) => {
   }
 };
 
+const getPassword = (username: string, callback: any, errorCallback: any) => {
+  try {
+    const passwordResult = db.query(
+      'SELECT id, password FROM user WHERE username = ?',
+      [username]
+    );
+    if (passwordResult.length != 1) {
+      errorCallback('User not found');
+    }
+    callback(passwordResult);
+  } catch (error) {
+    errorCallback(error);
+  }
+};
+
 module.exports = {
   returnPosts: returnPosts,
   createPost: createPost,
@@ -363,4 +413,6 @@ module.exports = {
   addComment: addComment,
   selectComments: selectComments,
   returnUserPosts: returnUserPosts,
+  validateAuthToken: validateAuthToken,
+  getPassword: getPassword,
 };
