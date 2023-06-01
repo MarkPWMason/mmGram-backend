@@ -133,6 +133,8 @@ const deletePost = (id: number, callback: any, errorCallback: any) => {
     if (deleteResult.affectedRows != 1) {
       errorCallback();
     } else {
+      db.query('DELETE FROM comment WHERE comment.post_id = ?', [id]);
+      db.query('DELETE FROM post_like WHERE post_like.post_id = ?', [id]);
       callback(imageName);
     }
   } catch (error) {
