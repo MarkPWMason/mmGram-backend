@@ -2,6 +2,7 @@ import { userInfo } from 'os';
 
 const mysql = require('sync-mysql');
 require('dotenv').config();
+
 const moment = require('moment');
 
 let db: any;
